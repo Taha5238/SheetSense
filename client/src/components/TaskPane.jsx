@@ -8,6 +8,8 @@ const TaskPane = () => {
         { type: 'bot', text: 'Hi! I am connected to Gemini AI (Server). I can generate data, formulas, charts, and more. What do you need?' }
     ]);
     const [inputValue, setInputValue] = useState('');
+    const [isListening, setIsListening] = useState(false);
+    const recognitionRef = useRef(null);
     const [isProcessing, setIsProcessing] = useState(false);
     const messagesEndRef = useRef(null);
 
@@ -19,12 +21,73 @@ const TaskPane = () => {
         scrollToBottom();
     }, [messages]);
 
+    useEffect(() => {
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognitionRef.current = new SpeechRecognition();
+            recognitionRef.current.continuous = true;
+            recognitionRef.current.interimResults = true;
+
+            recognitionRef.current.onstart = () => {
+                setIsListening(true);
+            };
+
+            recognitionRef.current.onend = () => {
+                setIsListening(false);
+            };
+
+            recognitionRef.current.onresult = (event) => {
+                let interimTranscript = '';
+                let finalTranscript = '';
+
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        finalTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+
+                if (finalTranscript) {
+                    setInputValue(prev => {
+                        const newValue = prev ? `${prev} ${finalTranscript}` : finalTranscript;
+                        return newValue;
+                    });
+                }
+            };
+
+            recognitionRef.current.onerror = (event) => {
+                console.error('Speech recognition error', event.error);
+                setIsListening(false);
+            };
+        }
+
+        return () => {
+            if (recognitionRef.current) {
+                recognitionRef.current.stop();
+            }
+        };
+    }, []);
+
+    const toggleListening = () => {
+        if (isListening) {
+            recognitionRef.current?.stop();
+        } else {
+            recognitionRef.current?.start();
+        }
+    };
+
     const handleSendMessage = async (e) => {
         e.preventDefault();
         if (!inputValue.trim()) return;
 
         const userText = inputValue;
         setInputValue('');
+
+        // Stop listening when sending message
+        if (isListening) {
+            recognitionRef.current?.stop();
+        }
 
         // Add user message
         setMessages(prev => [...prev, { type: 'user', text: userText }]);
@@ -63,8 +126,8 @@ const TaskPane = () => {
                             {msg.type === 'user' ? <User size={14} /> : <Bot size={14} />}
                         </div>
                         <div className={`p-3 rounded-2xl text-sm max-w-[85%] ${msg.type === 'user'
-                                ? 'bg-white/10 rounded-tr-sm'
-                                : 'bg-white/5 border border-white/10 rounded-tl-sm'
+                            ? 'bg-white/10 rounded-tr-sm'
+                            : 'bg-white/5 border border-white/10 rounded-tl-sm'
                             }`}>
                             {msg.text}
                         </div>
@@ -97,8 +160,8 @@ const TaskPane = () => {
                         type="text"
                         value={inputValue}
                         onChange={(e) => setInputValue(e.target.value)}
-                        placeholder="Ask Gemini to edit..."
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 pr-12 text-sm focus:outline-none focus:border-cyan-500/50 transition-colors placeholder:text-gray-500"
+                        placeholder={isListening ? "Listening..." : "Ask Gemini to edit..."}
+                        className={`w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 pr-12 text-sm focus:outline-none focus:border-cyan-500/50 transition-colors placeholder:text-gray-500 ${isListening ? 'border-cyan-500/50 ring-1 ring-cyan-500/20' : ''}`}
                     />
                     <button
                         type="submit"
@@ -109,9 +172,13 @@ const TaskPane = () => {
                     </button>
                 </form>
                 <div className="flex justify-center mt-2">
-                    <button className="flex items-center gap-1.5 text-[10px] text-gray-500 hover:text-cyan-400 transition-colors">
-                        <Mic size={12} />
-                        Tap to speak
+                    <button
+                        onClick={toggleListening}
+                        className={`flex items-center gap-1.5 text-[10px] transition-all duration-300 ${isListening ? 'text-cyan-400 scale-110' : 'text-gray-500 hover:text-cyan-400'
+                            }`}
+                    >
+                        <Mic size={12} className={isListening ? 'animate-pulse' : ''} />
+                        {isListening ? 'Listening...' : 'Tap to speak'}
                     </button>
                 </div>
             </div>
