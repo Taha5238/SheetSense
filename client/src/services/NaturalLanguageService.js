@@ -8,6 +8,58 @@
 const NaturalLanguageService = {
 
     /**
+     * Process voice command audio blob.
+     */
+    processVoiceCommand: async (audioBlob) => {
+        try {
+            // Get context
+            let contextInfo = "No selection info.";
+            try {
+                await Excel.run(async (context) => {
+                    const range = context.workbook.getSelectedRange();
+                    range.load("address");
+                    await context.sync();
+                    contextInfo = `Selected Range: "${range.address}"`;
+                });
+            } catch (e) {
+                console.warn("Excel context error:", e);
+            }
+
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recording.webm');
+            formData.append('context', contextInfo);
+
+            const response = await fetch('http://localhost:3000/api/voice', {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`Server error: ${response.status} ${errText}`);
+            }
+
+            const parsed = await response.json();
+
+            if (!parsed.actions || !Array.isArray(parsed.actions)) {
+                return { text: "I heard you, but didn't generate any Excel actions.", actions: [] };
+            }
+
+            // Execute Actions
+            await NaturalLanguageService.executeActions(parsed.actions);
+
+            return {
+                text: `Done! Executed ${parsed.actions.length} action(s).`,
+                actions: parsed.actions
+            };
+
+        } catch (error) {
+            console.error("Voice Processing Error:", error);
+            throw error;
+        }
+    },
+
+    /**
      * Process a natural language command using Backend.
      */
     processCommand: async (command) => {

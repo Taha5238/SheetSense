@@ -5,13 +5,20 @@ import NaturalLanguageService from '../services/NaturalLanguageService';
 
 const TaskPane = () => {
     const [messages, setMessages] = useState([
-        { type: 'bot', text: 'Hi! I am connected to Gemini AI (Server). I can generate data, formulas, charts, and more. What do you need?' }
+        { type: 'bot', text: 'Hi! I am connected to Gemini AI . I can generate data, formulas, charts, and more. What do you need?' }
     ]);
     const [inputValue, setInputValue] = useState('');
     const [isListening, setIsListening] = useState(false);
-    const recognitionRef = useRef(null);
     const [isProcessing, setIsProcessing] = useState(false);
+    const mediaRecorderRef = useRef(null);
+    const audioChunksRef = useRef([]);
     const messagesEndRef = useRef(null);
+    const [debugLog, setDebugLog] = useState([]);
+
+    const addDebugMessage = (msg) => {
+        console.log(msg);
+        setMessages(prev => [...prev, { type: 'debug', text: `[DEBUG] ${msg}` }]);
+    };
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -21,59 +28,83 @@ const TaskPane = () => {
         scrollToBottom();
     }, [messages]);
 
-    useEffect(() => {
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognitionRef.current = new SpeechRecognition();
-            recognitionRef.current.continuous = true;
-            recognitionRef.current.interimResults = true;
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+            setIsListening(false);
+            addDebugMessage("Recording stopped.");
+        }
+    };
 
-            recognitionRef.current.onstart = () => {
-                setIsListening(true);
-            };
-
-            recognitionRef.current.onend = () => {
-                setIsListening(false);
-            };
-
-            recognitionRef.current.onresult = (event) => {
-                let interimTranscript = '';
-                let finalTranscript = '';
-
-                for (let i = event.resultIndex; i < event.results.length; ++i) {
-                    if (event.results[i].isFinal) {
-                        finalTranscript += event.results[i][0].transcript;
-                    } else {
-                        interimTranscript += event.results[i][0].transcript;
-                    }
-                }
-
-                if (finalTranscript) {
-                    setInputValue(prev => {
-                        const newValue = prev ? `${prev} ${finalTranscript}` : finalTranscript;
-                        return newValue;
-                    });
-                }
-            };
-
-            recognitionRef.current.onerror = (event) => {
-                console.error('Speech recognition error', event.error);
-                setIsListening(false);
-            };
+    const handleVoiceResponse = async (audioBlob) => {
+        if (!audioBlob || audioBlob.size === 0) {
+            addDebugMessage("Error: Empty audio recording.");
+            return;
         }
 
-        return () => {
-            if (recognitionRef.current) {
-                recognitionRef.current.stop();
-            }
-        };
-    }, []);
+        setIsProcessing(true);
+        addDebugMessage(`Sending audio (${audioBlob.size} bytes)...`);
 
-    const toggleListening = () => {
+        try {
+            const result = await NaturalLanguageService.processVoiceCommand(audioBlob);
+
+            addDebugMessage("Voice command processed successfully.");
+
+            setMessages(prev => [...prev, {
+                type: 'bot',
+                text: result.text
+            }]);
+
+            if (result.actions && result.actions.length > 0) {
+                addDebugMessage(`Actions executed: ${JSON.stringify(result.actions)}`);
+            }
+
+        } catch (error) {
+            console.error("Voice Processing Failed:", error);
+            addDebugMessage(`Error: ${error.message}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const toggleListening = async () => {
         if (isListening) {
-            recognitionRef.current?.stop();
+            stopRecording();
         } else {
-            recognitionRef.current?.start();
+            try {
+                addDebugMessage("Requesting microphone...");
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                addDebugMessage("Microphone granted.");
+
+                const mediaRecorder = new MediaRecorder(stream);
+                mediaRecorderRef.current = mediaRecorder;
+                audioChunksRef.current = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunksRef.current.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                    // Stop all tracks
+                    stream.getTracks().forEach(track => track.stop());
+                    handleVoiceResponse(audioBlob);
+                };
+
+                mediaRecorder.start();
+                setIsListening(true);
+                addDebugMessage("Recording started...");
+
+            } catch (error) {
+                console.error("Microphone Error:", error);
+                let errorMsg = error.message;
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    errorMsg = "Permission denied. Please allow microphone access.";
+                }
+                addDebugMessage(`Start failed: ${errorMsg}`);
+            }
         }
     };
 
@@ -86,7 +117,7 @@ const TaskPane = () => {
 
         // Stop listening when sending message
         if (isListening) {
-            recognitionRef.current?.stop();
+            stopRecording();
         }
 
         // Add user message

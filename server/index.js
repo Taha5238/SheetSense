@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import multer from 'multer';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 dotenv.config();
@@ -8,12 +9,15 @@ dotenv.config();
 const app = express();
 const port = 3000;
 
+// Configure Multer for memory storage
+const upload = multer({ storage: multer.memoryStorage() });
+
 app.use(cors());
 app.use(express.json());
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 app.get('/', (req, res) => {
     res.send('SheetSense Backend is running');
@@ -101,6 +105,63 @@ Supported Actions:
 
     } catch (error) {
         console.error("Gemini Error:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/voice', upload.single('audio'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: "No audio file uploaded" });
+        }
+
+        const audioBase64 = req.file.buffer.toString('base64');
+        const { context } = req.body;
+
+        const ACTION_SCHEMA = `
+You are an AI assistant for Microsoft Excel. Your job is to translate user voice commands into JSON actions.
+Return a JSON OBJECT with a key "actions" containing an ARRAY of action objects.
+Do NOT return markdown. Return ONLY raw JSON.
+
+Supported Actions:
+1. **editCell** (address, values, isFormula)
+2. **formatRange** (address, format: {fill, fontColor, bold, italic, fontSize, numberFormat, horizontalAlignment})
+3. **createTable** (address, hasHeaders, name)
+4. **createChart** (dataRange, type, title, seriesBy)
+5. **addWorksheet** (name)
+6. **freezePanes** (type, count)
+`;
+
+        const parts = [
+            { text: `${ACTION_SCHEMA}\n\nContext: ${context || "No context provided"}\nUser Voice Command (Audio Provided)\n\nJSON Response:` },
+            {
+                inlineData: {
+                    mimeType: req.file.mimetype || 'audio/webm',
+                    data: audioBase64
+                }
+            }
+        ];
+
+        const result = await model.generateContent({
+            contents: [{ role: "user", parts: parts }]
+        });
+
+        const responseText = result.response.text();
+        const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
+
+        try {
+            const parsed = JSON.parse(cleanJson);
+            // Add a "transcript" field if Gemini doesn't provide it explicitly, 
+            // though we are asking for actions. We might want to ask for transcript too but let's stick to actions for now.
+            // Ideally we'd ask for: { transcript: "string", actions: [] }
+            res.json({ ...parsed, _raw: responseText });
+        } catch (e) {
+            console.error("Failed to parse JSON from voice:", responseText);
+            res.status(500).json({ error: "Failed to parse AI response", raw: responseText });
+        }
+
+    } catch (error) {
+        console.error("Voice Processing Error:", error);
         res.status(500).json({ error: error.message });
     }
 });
